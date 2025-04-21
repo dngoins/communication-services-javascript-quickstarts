@@ -39,6 +39,8 @@ let emailSent = false;
 
 const answerPromptSystemTemplate = `You are a sales agent designed to gather information from a potential customer regarding a Wellness retreat to Luxor, Egypt. Your task is to try to sell the idea of going to Luxor for Egypt's mysterious ancient history, the customer's health and peace of mind. Ask the customer questions and gather information about their needs and preferences. Find out when they want to travel, how long they want to stay, what type of activities they are interested in, and any other relevant customer contact information.
 
+When you need to collect their phone number, explicitly ask if they would like to use the number they're currently calling from as their contact number. If they say yes or agree in any way, tell them that you'll record their current number and they don't need to provide it.
+
 If the sentiment is going well, ask if they have a budget in mind for the trip. If the customer is not interested in traveling to Egypt, ask if they are interested in any other destinations or wellness retreats. Keep your responses short and concise, and avoid using filler words. Ask a couple of questions at a time and wait for the customer's response before moving on to the next couple of questions. If the customer is not responsive, ask them if they need assistance. If they are still unresponsive, politely end the call. Have a friendly and motivating tone and use positive language.
 
 You will track the customer's information in a JSON structure at the end of your response but hidden from the customer. Your response will be in two parts:
@@ -83,10 +85,12 @@ function isAllRequiredDataCollected(): boolean {
   
   for (const field of requiredFields) {
     if (customerData[field] === 'unknown' || customerData[field] === '') {
+      console.log(`Missing required field: ${field} = ${customerData[field]}`);
       return false;
     }
   }
   
+  console.log("All required fields are collected!");
   return true;
 }
 
@@ -129,13 +133,11 @@ async function sendCustomerDataEmail(): Promise<boolean> {
         <li><strong>Interest Level:</strong> ${customerData.interestLevel}</li>
         <li><strong>Notes:</strong> ${customerData.notes}</li>
       </ul>
-    `;
-
-    // Send email
+    `;    // Send email
     const info = await transporter.sendMail({
       from: `"House of Royals Wellness Temple" <${process.env.SMTP_EMAIL}>`,
-      to: `${process.env.TOURDL_EMAIL}`,
-	  cc: `${customerData.email}`,
+      to: process.env.TOURDL_EMAIL, // Use environment variable only
+      cc: customerData.email !== "unknown" ? customerData.email : undefined, // Only CC if we have a valid email
       subject: `New Wellness Retreat Inquiry - ${customerData.customerName} on - ${customerData.travelDate}`,
       html: emailBody,
     });
@@ -333,6 +335,18 @@ DATA_END`;
 	return conversationalResponse;
 }
 
+// Function to check if user wants to record their calling number
+async function wantsToRecordCallingNumber(userResponse: string): Promise<boolean> {
+    // Create a simple prompt to check if user wants to record their calling number
+    const systemPrompt = "You are a helpful assistant";
+    const userPrompt = `In 1 word: does "${userResponse}" indicate the user wants to record or use their current phone number? Answer with yes or no.`;
+    
+    const result = await getChatCompletions(systemPrompt, userPrompt);
+    const isAffirmative = result.toLowerCase().includes("yes");
+    console.log(`User wants to record calling number: ${isAffirmative} (based on: "${userResponse}")`);
+    return isAffirmative;
+}
+
 app.post("/api/incomingCall", async (req: any, res:any)=>{
 	console.log(`Received incoming call event - data --> ${JSON.stringify(req.body)} `);
 	const event = req.body[0];
@@ -430,39 +444,37 @@ app.post('/api/callbacks/:contextId', async (req:any, res:any) => {
 			console.log("Encountered error during call transfer, message=%s, code=%s, subCode=%s", resultInformation?.message, resultInformation?.code, resultInformation?.subCode);
 			await handlePlay(callMedia, callTransferFailurePrompt, transferFailedContext)
 				.catch(error => console.error("Error playing transfer failure message:", error));
-		}
-		else if(event.type === "Microsoft.Communication.RecognizeCompleted"){
+		}		else if(event.type === "Microsoft.Communication.RecognizeCompleted"){
 			if(eventData.recognitionType === "speech"){
 				const speechText = eventData.speechResult.speech;
 				if(speechText !== ''){
 					console.log(`Recognized speech: ${speechText}`);
 					
-					// if(await detectEscalateToAgentIntent(speechText)){
-					// 	handlePlay(callMedia, EndCallPhraseToConnectAgent, connectAgentContext);
-					// }
-					//else
-					//	{
-						const chatGptResponse = await getChatGptResponse(speechText);
-						//console.log("Chat GPT response: %s", chatGptResponse);
-
-						// const match = chatGptResponse.match(chatResponseExtractPattern);
-						// console.log(match);
-						// if(match){
-						// 	console.log("Chat GPT Answer=%s, Sentiment Rating=%s, Intent=%s, Category=%s",
-						// 	match[0], match[1], match[2], match[3]);
-						// 	const score = getSentimentScore(match[1].trim());
-						// 	console.log("score=%s", score)
-						// 	if(score > -1 && score < 5){
-						// 		handlePlay(callMedia, connectAgentPrompt, connectAgentContext);
-						// 	}
-						//	else{
-							//handlePlay(callMedia, chatGptResponse, goodbyeContext);
-							await startRecognizing(callMedia, callerId, chatGptResponse, 'GetFreeFormText');
-						//}
-					//}
+					// Check if the user wants to record their calling number
+					if(await wantsToRecordCallingNumber(speechText)) {
+						console.log("User wants to record their calling number");
+						
+						// Extract the phone number from the call data
+						if(callerId) {
+							// Format the phone number (removing any prefixes like "tel:")
+							const formattedNumber = callerId.replace('tel:', '');
+							
+							// Update the customer data with the calling number
+							customerData.phoneNumber = formattedNumber;
+							
+							// Let the user know we've recorded their number
+							const confirmationMessage = `I've recorded your phone number ${formattedNumber}. Thank you! Now, let's continue with your wellness retreat planning.`;
+							await startRecognizing(callMedia, callerId, confirmationMessage, 'GetFreeFormText');
+							return;
+						}
+					}
+					
+					// Normal flow continues if not recording phone number
+					const chatGptResponse = await getChatGptResponse(speechText);
+					await startRecognizing(callMedia, callerId, chatGptResponse, 'GetFreeFormText');
 				}
 			}
-		}		
+		}
 		else if(event.type === "Microsoft.Communication.RecognizeFailed") {
 			try {
 				const resultInformation = eventData.resultInformation;
