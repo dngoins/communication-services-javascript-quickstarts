@@ -1,14 +1,12 @@
 # Ignore node_modules directory
 node_modules/
 
-# Ignore environment variables file
+# Ignore environment variables files
 .env
+.env.*
 venv
 .venv
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+*.env
 
 
 # Ignore build output directory
