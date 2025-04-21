@@ -3,6 +3,13 @@ node_modules/
 
 # Ignore environment variables file
 .env
+venv
+.venv
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
 
 # Ignore build output directory
 dist/
