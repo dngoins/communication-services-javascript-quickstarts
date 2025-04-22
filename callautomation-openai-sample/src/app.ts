@@ -82,6 +82,30 @@ const goodbyeContext = "Goodbye";
 const agentPhonenumber = process.env.AGENT_PHONE_NUMBER;
 const chatResponseExtractPattern = /(?<=: ).*/g;
 
+// Array of voices to randomly select from
+const voices = [
+  "en-US-NancyNeural",  // Female voice
+  "en-US-JennyNeural",  // Female voice
+  "en-US-AriaNeural",   // Female voice
+  "en-US-GuyNeural",    // Male voice
+  "en-US-TonyNeural",   // Male voice
+  "en-US-DavisNeural",  // Male voice
+  "en-US-JasonNeural",  // Male voice
+  "en-GB-SoniaNeural",  // British female voice
+  "en-AU-NatashaNeural" // Australian female voice
+];
+
+// Get a random voice from the available options
+function getRandomVoice(): string {
+  const randomIndex = Math.floor(Math.random() * voices.length);
+  const selectedVoice = voices[randomIndex];
+  console.log(`Selected random voice: ${selectedVoice}`);
+  return selectedVoice;
+}
+
+// Current voice for this call - will be set once per call
+let currentCallVoice = "en-US-NancyNeural"; // Default voice
+
 // Check if all required customer data is collected
 function isAllRequiredDataCollected(): boolean {
   const requiredFields = ['customerName', 'email', 'travelDate', 'stayDuration'];
@@ -241,7 +265,7 @@ async function hangUpCall() {
 
 async function startRecognizing(callMedia: CallMedia, callerId: string, message: string, context: string){
 	try {
-		const play : TextSource = { text: message, voiceName: "en-US-NancyNeural", kind: "textSource"}
+		const play : TextSource = { text: message, voiceName: getRandomVoice(), kind: "textSource"}
 		const recognizeOptions: CallMediaRecognizeSpeechOptions = { 
 			endSilenceTimeoutInSeconds: 2, 
 			playPrompt: play, 
@@ -335,9 +359,67 @@ async function startRecognizing(callMedia: CallMedia, callerId: string, message:
 				setTimeout(async () => {
 					await startRecognizing(callMedia, callerId, continuationMessage, 'GetFreeFormText');
 				}, 3000); // Short delay before continuing
-			}
-		} catch (fallbackError) {
+			}		} catch (fallbackError) {
 			console.error(`Error in fallback handling: ${fallbackError}`);
+			
+			// Try to inform the user and hang up the call if we can't continue
+			try {
+				if (callMedia) {
+					console.log("Attempting to play error message and hang up the call due to fallback error");
+					
+					// Create a helpful message based on collected data
+					let farewellMessage = "";
+					if (isAllRequiredDataCollected()) {
+						// Use personalized goodbye if we have all required data
+						farewellMessage = createPersonalizedGoodbyeMessage();
+					} else {
+						// Use an apologetic message for incomplete data
+						farewellMessage = "I'm sorry, but we're experiencing technical difficulties with this call. Our team will follow up with you shortly. Thank you for your patience.";
+					}
+					
+					// Try to play the message
+					const finalMessage: TextSource = { 
+						text: farewellMessage,
+						voiceName: "en-US-NancyNeural", 
+						kind: "textSource"
+					};
+					
+					// Attempt to play the message, then hang up
+					await callMedia.playToAll([finalMessage])
+						.then(async () => {
+							console.log("Successfully played farewell message, hanging up call in 5 seconds");
+							// Short delay to ensure message is heard
+							setTimeout(async () => {
+								await hangUpCall().catch(err => console.error("Error hanging up call after fallback error:", err));
+							}, 5000);
+						})
+						.catch(async (playError) => {
+							console.error("Failed to play farewell message:", playError);
+							// If playing message fails, try to hang up immediately
+							await hangUpCall().catch(err => console.error("Error during emergency hangup:", err));
+						});
+					
+					// Send email with current data if not already sent
+					if (!emailSent && Object.values(customerData).some(val => val !== 'unknown' && val !== '')) {
+						console.log("Sending technical difficulty email due to fallback error...");
+						await sendTechnicalDifficultyEmail().catch(err => 
+							console.error("Failed to send technical difficulty email:", err)
+						);
+					}
+				} else {
+					// If we don't have callMedia, just try to hang up
+					console.log("No call media available, attempting direct hangup");
+					await hangUpCall().catch(err => console.error("Error during emergency hangup:", err));
+				}
+			} catch (emergencyError) {
+				console.error(`Critical error in emergency fallback handling: ${emergencyError}`);
+				// Last resort - try direct hangup if everything else fails
+				try {
+					await hangUpCall();
+				} catch (finalError) {
+					console.error("All attempts to gracefully end the call have failed");
+				}
+			}
 		}
 	}
 }
@@ -692,6 +774,11 @@ app.post("/api/incomingCall", async (req: any, res:any)=>{
 
 			return;
 		}
+		
+		// Select a random voice for this call
+		currentCallVoice = getRandomVoice();
+		console.log(`Using voice ${currentCallVoice} for this call`);
+		
 		callerId = eventData.from.rawId;
 		// Store the calling number in customer data
 		const formattedCallerNumber = callerId.replace('tel:', '');
