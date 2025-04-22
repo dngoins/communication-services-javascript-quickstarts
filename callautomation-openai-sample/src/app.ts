@@ -265,7 +265,7 @@ async function hangUpCall() {
 
 async function startRecognizing(callMedia: CallMedia, callerId: string, message: string, context: string){
 	try {
-		const play : TextSource = { text: message, voiceName: getRandomVoice(), kind: "textSource"}
+		const play : TextSource = { text: message, voiceName: currentCallVoice, kind: "textSource"}
 		const recognizeOptions: CallMediaRecognizeSpeechOptions = { 
 			endSilenceTimeoutInSeconds: 2, 
 			playPrompt: play, 
@@ -277,7 +277,8 @@ async function startRecognizing(callMedia: CallMedia, callerId: string, message:
 
 		const targetParticipant = createIdentifierFromRawId(callerId);
 		await callMedia.startRecognizing(targetParticipant, recognizeOptions);
-		console.log(`Started recognizing with context: ${context}`);	} catch (error) {		
+		console.log(`Started recognizing with context: ${context}`);
+	} catch (error) {		
 		console.error(`Error in startRecognizing: ${error}`);
 		technicalDifficultiesCount++; // Increment the technical difficulties counter
 		console.log(`Technical difficulties count: ${technicalDifficultiesCount}`);
@@ -305,12 +306,20 @@ async function startRecognizing(callMedia: CallMedia, callerId: string, message:
 						kind: "textSource"
 					};
 					
-					await callMedia.playToAll([finalMessage]);
+					// Use a promise with a timeout to ensure the call gets hung up even if playToAll fails
+					try {
+						await Promise.race([
+							callMedia.playToAll([finalMessage]),
+							new Promise((_, reject) => setTimeout(() => reject(new Error("Play timeout")), 10000))
+						]);
+					} catch (playError) {
+						console.error(`Error playing final message: ${playError}`);
+					}
 					
 					// Send email with current data
 					if (!emailSent) {
 						console.log("Sending technical difficulty email before ending call...");
-						await sendTechnicalDifficultyEmail();
+						await sendTechnicalDifficultyEmail().catch(err => console.error("Error sending technical difficulty email:", err));
 					}
 					
 					// End the call after a short delay to allow the message to be heard
@@ -318,6 +327,10 @@ async function startRecognizing(callMedia: CallMedia, callerId: string, message:
 						await hangUpCall().catch(err => console.error("Error hanging up call after technical difficulties:", err));
 					}, 8000);
 					
+					return;
+				} else {
+					// If callMedia is not available, just hang up directly
+					await hangUpCall().catch(err => console.error("Error hanging up call with no callMedia:", err));
 					return;
 				}
 			} catch (endCallError) {
@@ -337,7 +350,16 @@ async function startRecognizing(callMedia: CallMedia, callerId: string, message:
 					voiceName: "en-US-NancyNeural", 
 					kind: "textSource"
 				};
-				await callMedia.playToAll([errorPlay]);
+				
+				// Use a promise with a timeout to ensure we don't get stuck
+				try {
+					await Promise.race([
+						callMedia.playToAll([errorPlay]),
+						new Promise((_, reject) => setTimeout(() => reject(new Error("Play timeout")), 5000))
+					]);
+				} catch (playError) {
+					console.error(`Error playing error message: ${playError}`);
+				}
 				
 				// Send email with current data if there are technical difficulties
 				if (!emailSent) {
@@ -357,9 +379,15 @@ async function startRecognizing(callMedia: CallMedia, callerId: string, message:
 				
 				// Continue the conversation with appropriate context
 				setTimeout(async () => {
-					await startRecognizing(callMedia, callerId, continuationMessage, 'GetFreeFormText');
+					await startRecognizing(callMedia, callerId, continuationMessage, 'GetFreeFormText')
+						.catch(err => {
+							console.error(`Failed to continue conversation: ${err}`);
+							// If we can't continue the conversation, hang up after a final message
+							hangUpCall().catch(hangupErr => console.error("Error hanging up call after failing to continue:", hangupErr));
+						});
 				}, 3000); // Short delay before continuing
-			}		} catch (fallbackError) {
+			}
+		} catch (fallbackError) {
 			console.error(`Error in fallback handling: ${fallbackError}`);
 			
 			// Try to inform the user and hang up the call if we can't continue
@@ -384,20 +412,24 @@ async function startRecognizing(callMedia: CallMedia, callerId: string, message:
 						kind: "textSource"
 					};
 					
-					// Attempt to play the message, then hang up
-					await callMedia.playToAll([finalMessage])
-						.then(async () => {
-							console.log("Successfully played farewell message, hanging up call in 5 seconds");
-							// Short delay to ensure message is heard
-							setTimeout(async () => {
-								await hangUpCall().catch(err => console.error("Error hanging up call after fallback error:", err));
-							}, 5000);
-						})
-						.catch(async (playError) => {
-							console.error("Failed to play farewell message:", playError);
-							// If playing message fails, try to hang up immediately
-							await hangUpCall().catch(err => console.error("Error during emergency hangup:", err));
-						});
+					// Use a promise with a timeout to ensure we don't get stuck
+					try {
+						await Promise.race([
+							callMedia.playToAll([finalMessage]),
+							new Promise((_, reject) => setTimeout(() => reject(new Error("Play timeout")), 5000))
+						]);
+						
+						console.log("Successfully played farewell message, hanging up call in 5 seconds");
+						
+						// Short delay to ensure message is heard
+						setTimeout(async () => {
+							await hangUpCall().catch(err => console.error("Error hanging up call after fallback error:", err));
+						}, 5000);
+					} catch (playError) {
+						console.error("Failed to play farewell message:", playError);
+						// If playing message fails, try to hang up immediately
+						await hangUpCall().catch(err => console.error("Error during emergency hangup:", err));
+					}
 					
 					// Send email with current data if not already sent
 					if (!emailSent && Object.values(customerData).some(val => val !== 'unknown' && val !== '')) {
@@ -418,6 +450,13 @@ async function startRecognizing(callMedia: CallMedia, callerId: string, message:
 					await hangUpCall();
 				} catch (finalError) {
 					console.error("All attempts to gracefully end the call have failed");
+				}
+				
+				// Even if everything fails, ensure the technical difficulty email is sent
+				if (!emailSent && Object.values(customerData).some(val => val !== 'unknown' && val !== '')) {
+					sendTechnicalDifficultyEmail().catch(err => 
+						console.error("Failed to send final technical difficulty email:", err)
+					);
 				}
 			}
 		}
@@ -763,40 +802,126 @@ function createPersonalizedGoodbyeMessage(): string {
 
 app.post("/api/incomingCall", async (req: any, res:any)=>{
 	console.log(`Received incoming call event - data --> ${JSON.stringify(req.body)} `);
+	
+	// Ensure there's at least one event in the array
+	if (!req.body || !Array.isArray(req.body) || req.body.length === 0) {
+		console.error("Invalid incoming call event body:", req.body);
+		res.status(400).send("Invalid event body");
+		return;
+	}
+	
 	const event = req.body[0];
-	try{
+	
+	// Validate event structure
+	if (!event || !event.data) {
+		console.error("Event or event data is missing:", event);
+		res.status(400).send("Invalid event structure");
+		return;
+	}
+	
+	try {
 		const eventData = event.data;
+		
+		// Handle subscription validation event
 		if (event.eventType === "Microsoft.EventGrid.SubscriptionValidationEvent") {
 			console.log("Received SubscriptionValidation event");
 			res.status(200).json({
 				validationResponse: eventData.validationCode,
 			});
-
 			return;
 		}
+		
+		// Respond immediately to prevent timeouts that could lead to busy signals
+		res.status(202).send("Processing call");
+		
+		// Ensure ACS client is initialized
+		if (!acsClient) {
+			console.log("ACS client not initialized, creating it now");
+			await createAcsClient();
+		}
+		
+		// Reset any previous call state
+		resetCustomerData();
+		technicalDifficultiesCount = 0;
 		
 		// Select a random voice for this call
 		currentCallVoice = getRandomVoice();
 		console.log(`Using voice ${currentCallVoice} for this call`);
 		
+		// Extract caller ID
+		if (!eventData.from || !eventData.from.rawId) {
+			throw new Error("Missing caller information in event data");
+		}
+		
 		callerId = eventData.from.rawId;
+		
 		// Store the calling number in customer data
 		const formattedCallerNumber = callerId.replace('tel:', '');
 		customerData.calledFromNumber = formattedCallerNumber;
 		console.log(`Call coming from: ${formattedCallerNumber}`);
 		
+		// Validate required data for answering the call
+		if (!eventData.incomingCallContext) {
+			throw new Error("Missing incomingCallContext in event data");
+		}
+		
+		if (!process.env.CALLBACK_URI) {
+			throw new Error("Missing CALLBACK_URI environment variable");
+		}
+		
+		if (!process.env.COGNITIVE_SERVICE_ENDPOINT) {
+			throw new Error("Missing COGNITIVE_SERVICE_ENDPOINT environment variable");
+		}
+		
+		// Generate unique ID for this call
 		const uuid = uuidv4();
 		const callbackUri = `${process.env.CALLBACK_URI}/api/callbacks/${uuid}?callerId=${callerId}`;
 		const incomingCallContext = eventData.incomingCallContext;
-		console.log(`Cognitive service endpoint:  ${process.env.COGNITIVE_SERVICE_ENDPOINT.trim()}`);
-		const callIntelligenceOptions: CallIntelligenceOptions = { cognitiveServicesEndpoint: process.env.COGNITIVE_SERVICE_ENDPOINT };
-		const answerCallOptions: AnswerCallOptions = { callIntelligenceOptions: callIntelligenceOptions }; 
-		answerCallResult = await acsClient.answerCall(incomingCallContext, callbackUri, answerCallOptions);
-		callConnection = answerCallResult.callConnection;
-		callMedia = callConnection.getCallMedia();
+		
+		console.log(`Cognitive service endpoint: ${process.env.COGNITIVE_SERVICE_ENDPOINT.trim()}`);
+		console.log(`Callback URI: ${callbackUri}`);
+		
+		// Set up call intelligence options
+		const callIntelligenceOptions: CallIntelligenceOptions = { 
+			cognitiveServicesEndpoint: process.env.COGNITIVE_SERVICE_ENDPOINT 
+		};
+		
+		// Configure answer call options
+		const answerCallOptions: AnswerCallOptions = { 
+			callIntelligenceOptions: callIntelligenceOptions 
+		}; 
+		
+		// Attempt to answer the call with a timeout guard
+		console.log("Attempting to answer the call...");
+		try {
+			answerCallResult = await Promise.race([
+				acsClient.answerCall(incomingCallContext, callbackUri, answerCallOptions),
+				new Promise<never>((_, reject) => 
+					setTimeout(() => reject(new Error("Answer call timeout")), 15000)
+				)
+			]);
+					console.log("Call answered successfully, setting up call connection");
+			callConnection = answerCallResult.callConnection;
+			callMedia = callConnection.getCallMedia();
+			
+			// Log successful call setup without trying to access private property
+			console.log("Call successfully set up and ready to process");
+		} catch (answerError) {
+			console.error("Error answering call with timeout protection:", answerError);
+			throw answerError; // Re-throw to be handled by outer catch
+		}
 	}
 	catch(error){
-		console.error("Error during the incoming call event.", error);
+		console.error("Error during the incoming call event:", error);
+		
+		// Don't try to respond again if we've already sent a response
+		if (!res.headersSent) {
+			res.status(500).send("Error processing call");
+		}
+		
+		// Reset variables to prepare for next call
+		resetCustomerData();
+		technicalDifficultiesCount = 0;
 	}
 });
 
