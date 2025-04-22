@@ -19,12 +19,14 @@ let answerCallResult: AnswerCallResult;
 let callerId: string;
 let callMedia: CallMedia;
 let maxTimeout = 2;
+let technicalDifficultiesCount = 0; // Counter for technical difficulties
 
 // Customer session data storage
 let customerData = {
   customerName: "unknown",
   email: "unknown",
   phoneNumber: "unknown",
+  calledFromNumber: "unknown", // The number the customer called from
   travelDate: "unknown",
   stayDuration: "unknown",
   activities: "unknown",
@@ -52,6 +54,7 @@ DATA_START
   "customerName": "",
   "email": "",
   "phoneNumber": "",
+  "calledFromNumber": "",
   "travelDate": "",
   "stayDuration": "",
   "activities": "",
@@ -81,7 +84,7 @@ const chatResponseExtractPattern = /(?<=: ).*/g;
 
 // Check if all required customer data is collected
 function isAllRequiredDataCollected(): boolean {
-  const requiredFields = ['customerName', 'email', 'phoneNumber', 'travelDate', 'stayDuration'];
+  const requiredFields = ['customerName', 'email', 'travelDate', 'stayDuration'];
   
   for (const field of requiredFields) {
     if (customerData[field] === 'unknown' || customerData[field] === '') {
@@ -150,6 +153,57 @@ async function sendCustomerDataEmail(): Promise<boolean> {
   }
 }
 
+// Send email when technical difficulties occur
+async function sendTechnicalDifficultyEmail(): Promise<boolean> {
+  try {
+    // Create email transporter
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_SERVER,
+      port: parseInt(process.env.SMTP_PORT || '587'),
+      secure: false, // true for 465, false for other ports
+      auth: {
+        user: process.env.SMTP_EMAIL,
+        pass: process.env.SMTP_PASSWORD,
+      },
+    });
+
+    // Format customer data for email body
+    const emailBody = `
+      <h2>Technical Difficulty Notification</h2>
+      <p><strong>Date:</strong> ${new Date().toLocaleString()}</p>
+      <p>A technical difficulty occurred during a call. Below is the information collected so far:</p>
+      <h3>Customer Information:</h3>
+      <ul>
+        <li><strong>Called From Number:</strong> ${customerData.calledFromNumber}</li>
+        <li><strong>Name:</strong> ${customerData.customerName}</li>
+        <li><strong>Email:</strong> ${customerData.email}</li>
+        <li><strong>Preferred Phone:</strong> ${customerData.phoneNumber}</li>
+        <li><strong>Preferred Travel Date:</strong> ${customerData.travelDate}</li>
+        <li><strong>Stay Duration:</strong> ${customerData.stayDuration}</li>
+        <li><strong>Interested Activities:</strong> ${customerData.activities}</li>
+        <li><strong>Budget:</strong> ${customerData.budget}</li>
+        <li><strong>Alternate Destinations:</strong> ${customerData.alternateDestinations}</li>
+        <li><strong>Interest Level:</strong> ${customerData.interestLevel}</li>
+        <li><strong>Notes:</strong> ${customerData.notes}</li>
+      </ul>
+    `;
+
+    // Send email to tour registration email only (no CC to customer)
+    const info = await transporter.sendMail({
+      from: `"House of Royals Wellness Temple" <${process.env.SMTP_EMAIL}>`,
+      to: process.env.TOURDL_EMAIL, // Only send to tour registration, not to the customer
+      subject: `Technical Difficulty - Call from ${customerData.calledFromNumber}`,
+      html: emailBody,
+    });
+
+    console.log(`Technical difficulty email sent: ${info.messageId}`);
+    return true;
+  } catch (error) {
+    console.error("Error sending technical difficulty email:", error);
+    return false;
+  }
+}
+
 async function createAcsClient() {
 	const connectionString = process.env.CONNECTION_STRING || "";
 	
@@ -199,19 +253,88 @@ async function startRecognizing(callMedia: CallMedia, callerId: string, message:
 
 		const targetParticipant = createIdentifierFromRawId(callerId);
 		await callMedia.startRecognizing(targetParticipant, recognizeOptions);
-		console.log(`Started recognizing with context: ${context}`);
-	} catch (error) {
+		console.log(`Started recognizing with context: ${context}`);	} catch (error) {		
 		console.error(`Error in startRecognizing: ${error}`);
+		technicalDifficultiesCount++; // Increment the technical difficulties counter
+		console.log(`Technical difficulties count: ${technicalDifficultiesCount}`);
+		
+		// If this is the third technical difficulty, end the call
+		if (technicalDifficultiesCount >= 3) {
+			try {
+				if (callMedia) {
+					// Create a helpful message with their contact information
+					let contactInfo = "";
+					if (customerData.phoneNumber !== "unknown") {
+						contactInfo = `your phone number (${customerData.phoneNumber})`;
+					} else if (customerData.calledFromNumber !== "unknown") {
+						contactInfo = `the number you called from (${customerData.calledFromNumber})`;
+					} else if (customerData.email !== "unknown") {
+						contactInfo = `your email (${customerData.email})`;
+					} else {
+						contactInfo = "your contact information once you provide it";
+					}
+					
+					// Play the goodbye message
+					const finalMessage: TextSource = { 
+						text: `We seem to be experiencing ongoing technical difficulties. I'm sorry for the inconvenience. Someone from our team will reach out to you at ${contactInfo} shortly to assist with your Egypt travel plans. Thank you for your patience.`, 
+						voiceName: "en-US-NancyNeural", 
+						kind: "textSource"
+					};
+					
+					await callMedia.playToAll([finalMessage]);
+					
+					// Send email with current data
+					if (!emailSent) {
+						console.log("Sending technical difficulty email before ending call...");
+						await sendTechnicalDifficultyEmail();
+					}
+					
+					// End the call after a short delay to allow the message to be heard
+					setTimeout(async () => {
+						await hangUpCall().catch(err => console.error("Error hanging up call after technical difficulties:", err));
+					}, 8000);
+					
+					return;
+				}
+			} catch (endCallError) {
+				console.error(`Error ending call after multiple technical difficulties: ${endCallError}`);
+				// Try to hang up anyway if we caught another error
+				await hangUpCall().catch(err => console.error("Error in final hang up attempt:", err));
+				return;
+			}
+		}
+		
 		// If this fails, we should try to handle the call gracefully
 		try {
 			if (callMedia) {
-				// Try to play an error message and then disconnect
+				// Try to play an error message but continue from where we left off
 				const errorPlay: TextSource = { 
-					text: "I'm sorry, we're experiencing technical difficulties. Please try your call again later.", 
+					text: "I'm sorry, we're experiencing technical difficulties. Let's continue from where we left off.", 
 					voiceName: "en-US-NancyNeural", 
 					kind: "textSource"
 				};
 				await callMedia.playToAll([errorPlay]);
+				
+				// Send email with current data if there are technical difficulties
+				if (!emailSent) {
+					console.log("Sending technical difficulty email with current data...");
+					await sendTechnicalDifficultyEmail();
+				}
+				
+				// Create a continuation message based on collected data
+				let continuationMessage = "";
+				if (customerData.customerName !== "unknown") {
+					// If we have customer's name, use a personalized continuation
+					continuationMessage = generateContinuationPrompt(customerData);
+				} else {
+					// If we don't have any meaningful data yet, restart with the hello prompt
+					continuationMessage = helloPrompt;
+				}
+				
+				// Continue the conversation with appropriate context
+				setTimeout(async () => {
+					await startRecognizing(callMedia, callerId, continuationMessage, 'GetFreeFormText');
+				}, 3000); // Short delay before continuing
 			}
 		} catch (fallbackError) {
 			console.error(`Error in fallback handling: ${fallbackError}`);
@@ -227,13 +350,63 @@ function getSentimentScore(sentimentScore: string){
 
 async function handlePlay(callConnectionMedia:CallMedia, textToPlay: string, context: string){
 	try {
-		const play : TextSource = { text: textToPlay, voiceName: "en-US-NancyNeural", kind: "textSource"}
-		const playOptions : PlayOptions = { operationContext: context };
-		await callConnectionMedia.playToAll([play], playOptions);
+		// Split long messages into manageable chunks to prevent timeouts
+		const messageChunks = splitLongMessage(textToPlay);
+		
+		if (messageChunks.length === 1) {
+			// Single chunk - proceed normally
+			const play: TextSource = { text: textToPlay, voiceName: "en-US-NancyNeural", kind: "textSource" };
+			const playOptions: PlayOptions = { operationContext: context };
+			
+			// Use the safe call operation helper
+			await safeCallOperation(
+				() => callConnectionMedia.playToAll([play], playOptions),
+				`Error in handlePlay with context ${context}`
+			);
+		} else {
+			// Multiple chunks - play them sequentially with short pauses between
+			console.log(`Message too long, splitting into ${messageChunks.length} chunks`);
+			
+			for (let i = 0; i < messageChunks.length; i++) {
+				const isLastChunk = i === messageChunks.length - 1;
+				const chunkContext = isLastChunk ? context : "ChunkPlay";
+				
+				const play: TextSource = { 
+					text: messageChunks[i], 
+					voiceName: "en-US-NancyNeural", 
+					kind: "textSource" 
+				};
+				const playOptions: PlayOptions = { operationContext: chunkContext };
+				
+				// Use a try-catch for each chunk so one failure doesn't stop the entire sequence
+				try {
+					await callConnectionMedia.playToAll([play], playOptions);
+					
+					// Small pause between chunks for more natural speech
+					if (!isLastChunk) {
+						await new Promise(resolve => setTimeout(resolve, 500));
+					}
+				} catch (chunkError) {
+					console.error(`Error playing chunk ${i+1}/${messageChunks.length}: ${chunkError}`);
+					
+					// Only break the loop if it's a "Call not found" error
+					if (chunkError.toString().includes("Call not found")) {
+						if (!emailSent && Object.values(customerData).some(val => val !== 'unknown' && val !== '')) {
+							console.log("Call was lost during chunk playback. Sending technical difficulty email...");
+							await sendTechnicalDifficultyEmail().catch(err => 
+								console.error("Failed to send technical difficulty email:", err)
+							);
+						}
+						break;
+					}
+				}
+			}
+		}
+		
 		console.log(`Successfully played message with context: ${context}`);
 	} catch (error) {
-		console.error(`Error in handlePlay with context ${context}:`, error);
-		// Don't rethrow the error to prevent unhandled rejections
+		// We already logged the error in safeCallOperation
+		// No need to rethrow to prevent unhandled rejections
 	}
 }
 
@@ -335,16 +508,175 @@ DATA_END`;
 	return conversationalResponse;
 }
 
-// Function to check if user wants to record their calling number
-async function wantsToRecordCallingNumber(userResponse: string): Promise<boolean> {
-    // Create a simple prompt to check if user wants to record their calling number
-    const systemPrompt = "You are a helpful assistant";
-    const userPrompt = `In 1 word: does "${userResponse}" indicate the user wants to record or use their current phone number? Answer with yes or no.`;
+// Generate a continuation prompt based on collected customer data
+function generateContinuationPrompt(customerData: any): string {
+  let prompt = "";
+  
+  // Start with a personalized greeting if we have their name
+  if (customerData.customerName !== "unknown") {
+    prompt = `Thank you for your patience, ${customerData.customerName}. `;
+  } else {
+    prompt = "Thank you for your patience. ";
+  }
+  
+  // Add context based on what we already know
+  let missingFields = [];
+  if (customerData.travelDate === "unknown") missingFields.push("when you'd like to travel");
+  if (customerData.stayDuration === "unknown") missingFields.push("how long you'd like to stay");
+  if (customerData.activities === "unknown") missingFields.push("what activities interest you");
+  if (customerData.email === "unknown") missingFields.push("your email for contact purposes");
+  if (customerData.phoneNumber === "unknown") missingFields.push("your preferred contact number");
+  
+  if (missingFields.length > 0) {
+    // Format the list of missing information
+    if (missingFields.length === 1) {
+      prompt += `Let's continue our conversation about your Wellness retreat to Luxor, Egypt. I'd still like to know ${missingFields[0]}.`;
+    } else {
+      const lastItem = missingFields.pop();
+      prompt += `Let's continue our conversation about your Wellness retreat to Luxor, Egypt. I'd still like to know ${missingFields.join(", ")} and ${lastItem}.`;
+    }
+  } else {
+    // If we have all the key information
+    prompt += "Let's continue our conversation about your Wellness retreat to Luxor, Egypt. Is there anything else you'd like to know or share about your trip?";
+  }
+  
+  return prompt;
+}
+
+// Splits a long message into smaller chunks to prevent timeouts
+function splitLongMessage(message: string): string[] {
+  // Maximum length for a single response (characters)
+  const maxChunkLength = 1000;
+  
+  if (message.length <= maxChunkLength) {
+    return [message];
+  }
+  
+  const chunks: string[] = [];
+  
+  // Try to split on sentences to maintain natural pauses
+  const sentences = message.match(/[^.!?]+[.!?]+/g) || [];
+  
+  let currentChunk = "";
+  for (const sentence of sentences) {
+    // If adding this sentence would exceed the limit, start a new chunk
+    if (currentChunk.length + sentence.length > maxChunkLength) {
+      if (currentChunk.length > 0) {
+        chunks.push(currentChunk.trim());
+        currentChunk = "";
+      }
+      
+      // If a single sentence is longer than maxChunkLength, split it by words
+      if (sentence.length > maxChunkLength) {
+        const words = sentence.split(' ');
+        let wordChunk = "";
+        
+        for (const word of words) {
+          if (wordChunk.length + word.length + 1 > maxChunkLength) {
+            chunks.push(wordChunk.trim());
+            wordChunk = word;
+          } else {
+            wordChunk += ' ' + word;
+          }
+        }
+        
+        if (wordChunk.length > 0) {
+          currentChunk = wordChunk;
+        }
+      } else {
+        currentChunk = sentence;
+      }
+    } else {
+      currentChunk += sentence;
+    }
+  }
+  
+  if (currentChunk.length > 0) {
+    chunks.push(currentChunk.trim());
+  }
+  
+  return chunks;
+}
+
+// Helper function to safely handle call operations
+async function safeCallOperation(operation: () => Promise<any>, errorMessage: string): Promise<any> {
+  try {
+    return await operation();
+  } catch (error) {
+    console.error(`${errorMessage}: ${error}`);
     
-    const result = await getChatCompletions(systemPrompt, userPrompt);
-    const isAffirmative = result.toLowerCase().includes("yes");
-    console.log(`User wants to record calling number: ${isAffirmative} (based on: "${userResponse}")`);
-    return isAffirmative;
+    // Check specifically for "Call not found" errors
+    if (error.toString().includes("Call not found") || error.toString().includes("not found")) {
+      console.log("Call appears to have been disconnected or no longer exists.");
+      
+      // Send email if we have any meaningful data and haven't already sent one
+      if (!emailSent && Object.values(customerData).some(val => val !== 'unknown' && val !== '')) {
+        console.log("Call was lost but some data was collected. Sending technical difficulty email...");
+        await sendTechnicalDifficultyEmail().catch(err => 
+          console.error("Failed to send technical difficulty email:", err)
+        );
+      }
+    }
+    
+    // Rethrow the error so caller can handle it if needed
+    throw error;
+  }
+}
+
+// Function to reset customer data to initial state
+function resetCustomerData(): void {
+  // Store the called-from number temporarily as we want to keep that
+  const calledFromNumber = customerData.calledFromNumber;
+  
+  // Reset all customer data
+  customerData = {
+    customerName: "unknown",
+    email: "unknown",
+    phoneNumber: "unknown",
+    calledFromNumber: calledFromNumber, // Preserve the called-from number
+    travelDate: "unknown",
+    stayDuration: "unknown",
+    activities: "unknown",
+    budget: "unknown",
+    alternateDestinations: "unknown",
+    notes: "unknown",
+    interestLevel: "unknown"
+  };
+  
+  // Reset other global state
+  emailSent = false;
+  technicalDifficultiesCount = 0;
+  maxTimeout = 2;
+  
+  console.log("Customer data and session variables have been reset");
+}
+
+// Create a personalized goodbye message based on collected customer data
+function createPersonalizedGoodbyeMessage(): string {
+  // Base goodbye message
+  let message = "Thank you for your interest in our Wellness Retreat to Luxor, Egypt. ";
+  
+  // Add personalization if we have their name
+  if (customerData.customerName !== "unknown") {
+    message = `Thank you ${customerData.customerName} for your interest in our Wellness Retreat to Luxor, Egypt. `;
+  }
+  
+  // Add contact method-specific message
+  let contactMethod = "";
+  if (customerData.phoneNumber !== "unknown") {
+    contactMethod = `call you back at ${customerData.phoneNumber}`;
+  } else if (customerData.email !== "unknown") {
+    contactMethod = `reach out to you at ${customerData.email}`;
+  } else if (customerData.calledFromNumber !== "unknown") {
+    contactMethod = `call you back at ${customerData.calledFromNumber}`;
+  } else {
+    contactMethod = "contact you using the information you've provided";
+  }
+  
+  // Complete the message
+  message += `One of our travel specialists will ${contactMethod} shortly to discuss your trip details further. Have a wonderful day!`;
+  
+  return message;
 }
 
 app.post("/api/incomingCall", async (req: any, res:any)=>{
@@ -360,8 +692,12 @@ app.post("/api/incomingCall", async (req: any, res:any)=>{
 
 			return;
 		}
-
 		callerId = eventData.from.rawId;
+		// Store the calling number in customer data
+		const formattedCallerNumber = callerId.replace('tel:', '');
+		customerData.calledFromNumber = formattedCallerNumber;
+		console.log(`Call coming from: ${formattedCallerNumber}`);
+		
 		const uuid = uuidv4();
 		const callbackUri = `${process.env.CALLBACK_URI}/api/callbacks/${uuid}?callerId=${callerId}`;
 		const incomingCallContext = eventData.incomingCallContext;
@@ -451,31 +787,30 @@ app.post('/api/callbacks/:contextId', async (req:any, res:any) => {
 					console.log(`Recognized speech: ${speechText}`);
 					
 					// Check if the user wants to record their calling number
-					if(await wantsToRecordCallingNumber(speechText)) {
-						console.log("User wants to record their calling number");
+					// if(await wantsToRecordCallingNumber(speechText)) {
+					// 	console.log("User wants to record their calling number");
 						
-						// Extract the phone number from the call data
-						if(callerId) {
-							// Format the phone number (removing any prefixes like "tel:")
-							const formattedNumber = callerId.replace('tel:', '');
+					// 	// Extract the phone number from the call data
+					// 	if(callerId) {
+					// 		// Format the phone number (removing any prefixes like "tel:")
+					// 		const formattedNumber = callerId.replace('tel:', '');
 							
-							// Update the customer data with the calling number
-							customerData.phoneNumber = formattedNumber;
+					// 		// Update the customer data with the calling number
+					// 		customerData.phoneNumber = formattedNumber;
 							
-							// Let the user know we've recorded their number
-							const confirmationMessage = `I've recorded your phone number ${formattedNumber}. Thank you! Now, let's continue with your wellness retreat planning.`;
-							await startRecognizing(callMedia, callerId, confirmationMessage, 'GetFreeFormText');
-							return;
-						}
-					}
+					// 		// Let the user know we've recorded their number
+					// 		const confirmationMessage = `I've recorded your phone number ${formattedNumber}. Thank you! Now, let's continue with your wellness retreat planning.`;
+					// 		await startRecognizing(callMedia, callerId, confirmationMessage, 'GetFreeFormText');
+					// 		return;
+					// 	}
+					// }
 					
 					// Normal flow continues if not recording phone number
 					const chatGptResponse = await getChatGptResponse(speechText);
 					await startRecognizing(callMedia, callerId, chatGptResponse, 'GetFreeFormText');
 				}
 			}
-		}
-		else if(event.type === "Microsoft.Communication.RecognizeFailed") {
+		}		else if(event.type === "Microsoft.Communication.RecognizeFailed") {
 			try {
 				const resultInformation = eventData.resultInformation;
 				var code = resultInformation.subCode;
@@ -484,14 +819,25 @@ app.post('/api/callbacks/:contextId', async (req:any, res:any) => {
 					await startRecognizing(callMedia, callerId, timeoutSilencePrompt, 'GetFreeFormText');
 				}
 				else{
-					await handlePlay(callMedia, goodbyePrompt, goodbyeContext);
+					// Check if we have all required data before ending the call
+					if (isAllRequiredDataCollected()) {
+						// Use personalized goodbye message for customers who provided all necessary info
+						const personalizedGoodbye = createPersonalizedGoodbyeMessage();
+						await handlePlay(callMedia, personalizedGoodbye, goodbyeContext);
+					} else {
+						// Use standard goodbye for incomplete interactions
+						await handlePlay(callMedia, goodbyePrompt, goodbyeContext);
+					}
 				}
 			} catch (error) {
 				console.error("Error handling RecognizeFailed event:", error);
 			}
-		} 
-		else if(event.type === "Microsoft.Communication.CallDisconnected"){
+		}else if(event.type === "Microsoft.Communication.CallDisconnected"){
 			console.log("Received CallDisconnected event");
+			
+			// Reset customer data when call is disconnected
+			resetCustomerData();
+			console.log("Customer data has been reset for the next call");
 		}
 		
 	}
