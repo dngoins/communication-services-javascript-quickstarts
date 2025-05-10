@@ -1,11 +1,11 @@
 import { config } from 'dotenv';
 import express, { Application } from 'express';
 import { PhoneNumberIdentifier, createIdentifierFromRawId } from "@azure/communication-common";
-import { CallAutomationClient, CallConnection, AnswerCallOptions, CallMedia, TextSource, AnswerCallResult, CallMediaRecognizeSpeechOptions, CallIntelligenceOptions, PlayOptions } from "@azure/communication-call-automation";
+import { CallAutomationClient, CallConnection, AnswerCallOptions, CallMedia, TextSource, AnswerCallResult, CallMediaRecognizeSpeechOptions, CallMediaRecognizeDtmfOptions, CallIntelligenceOptions, PlayOptions, DtmfTone } from "@azure/communication-call-automation";
 import { v4 as uuidv4 } from 'uuid';
 import { AzureKeyCredential, OpenAIClient } from '@azure/openai';
 import * as nodemailer from 'nodemailer';
-config();
+config( {override: true} );
 
 const PORT = process.env.PORT;
 const app: Application = express();
@@ -67,7 +67,7 @@ DATA_END
 
 Update this JSON with any customer information you collect. Keep previously collected information when responding. Use "unknown" as the value when information hasn't been collected yet. For interestLevel, use: "high", "medium", "low", or "unknown".`;
 
-const helloPrompt = "'Raw who bat', thank you for calling! Welcome to the House of Royals Wellness Temple. Do you want to travel to Egypt?";
+const helloPrompt = "'Raw who bat', thank you for calling! Welcome to the House of Royals Wellness Temple. Do you want to travel to Egypt? You can speak your answers or enter them using your phone keypad. Press 0 at any time to transfer to a human agent.";
 const timeoutSilencePrompt = "I'm sorry, I didn't hear anything. If you need assistance please let me know how I can help you.";
 const goodbyePrompt = "Thank you for calling! I hope I was able to assist you. Have a great day!";
 const connectAgentPrompt = "I'm sorry, I was not able to assist you with your request. Let me transfer you to an agent who can help you further. Please hold the line and I'll connect you shortly.";
@@ -111,10 +111,10 @@ function isAllRequiredDataCollected(): boolean {
   const requiredFields = ['customerName', 'email', 'travelDate', 'stayDuration'];
   
   for (const field of requiredFields) {
-    if (customerData[field] === 'unknown' || customerData[field] === '') {
-      console.log(`Missing required field: ${field} = ${customerData[field]}`);
-      return false;
-    }
+	if (customerData[field] === 'unknown' || customerData[field] === '') {
+	  console.log(`Missing required field: ${field} = ${customerData[field]}`);
+	  return false;
+	}
   }
   
   console.log("All required fields are collected!");
@@ -124,20 +124,20 @@ function isAllRequiredDataCollected(): boolean {
 // Send customer data via email
 async function sendCustomerDataEmail(): Promise<boolean> {
   try {
-    // Create email transporter
-    const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_SERVER,
-      port: parseInt(process.env.SMTP_PORT || '587'),
-      secure: false, // true for 465, false for other ports
-      auth: {
-        user: process.env.SMTP_EMAIL,
-        pass: process.env.SMTP_PASSWORD,
-      },
-    });
+	// Create email transporter
+	const transporter = nodemailer.createTransport({
+	  host: process.env.SMTP_SERVER,
+	  port: parseInt(process.env.SMTP_PORT || '587'),
+	  secure: false, // true for 465, false for other ports
+	  auth: {
+		user: process.env.SMTP_EMAIL,
+		pass: process.env.SMTP_PASSWORD,
+	  },
+	});
 
-    // Format customer data for email body
-    const emailBody = `
-      <h1>Thank you ${customerData.customerName}</h1>
+	// Format customer data for email body
+	const emailBody = `
+	  <h1>Thank you ${customerData.customerName}</h1>
 	  <p>We have received your inquiry and will get back to you shortly. We are excited to help you plan your Royal Luxury Egyptian Wellness Retreat!</p>
 	  <p>If you have any questions, please don't hesitate to reach out, contact our <a href="mailto:moreinfo@horwt.com?subject=General Question&body=Hello,%20I%20have%20a%20question%20about..." >support team</a>.</p>
 	  <p>Best regards,</p>
@@ -146,85 +146,85 @@ async function sendCustomerDataEmail(): Promise<boolean> {
 	  <p>Here is a summary of your inquiry:</p>	  
 	  <hr/>
 	  <h2>New Customer Inquiry</h2>
-      <p><strong>Date:</strong> ${new Date().toLocaleString()}</p>
-      <h3>Customer Information:</h3>
-      <ul>
-        <li><strong>Name:</strong> ${customerData.customerName}</li>
-        <li><strong>Email:</strong> ${customerData.email}</li>
-        <li><strong>Phone:</strong> ${customerData.phoneNumber}</li>
-        <li><strong>Preferred Travel Date:</strong> ${customerData.travelDate}</li>
-        <li><strong>Stay Duration:</strong> ${customerData.stayDuration}</li>
-        <li><strong>Interested Activities:</strong> ${customerData.activities}</li>
-        <li><strong>Budget:</strong> ${customerData.budget}</li>
-        <li><strong>Alternate Destinations:</strong> ${customerData.alternateDestinations}</li>
-        <li><strong>Interest Level:</strong> ${customerData.interestLevel}</li>
-        <li><strong>Notes:</strong> ${customerData.notes}</li>
-      </ul>
-    `;    // Send email
-    const info = await transporter.sendMail({
-      from: `"House of Royals Wellness Temple" <${process.env.SMTP_EMAIL}>`,
-      to: process.env.TOURDL_EMAIL, // Use environment variable only
-      cc: customerData.email !== "unknown" ? customerData.email : undefined, // Only CC if we have a valid email
-      subject: `New Wellness Retreat Inquiry - ${customerData.customerName} on - ${customerData.travelDate}`,
-      html: emailBody,
-    });
+	  <p><strong>Date:</strong> ${new Date().toLocaleString()}</p>
+	  <h3>Customer Information:</h3>
+	  <ul>
+		<li><strong>Name:</strong> ${customerData.customerName}</li>
+		<li><strong>Email:</strong> ${customerData.email}</li>
+		<li><strong>Phone:</strong> ${customerData.phoneNumber}</li>
+		<li><strong>Preferred Travel Date:</strong> ${customerData.travelDate}</li>
+		<li><strong>Stay Duration:</strong> ${customerData.stayDuration}</li>
+		<li><strong>Interested Activities:</strong> ${customerData.activities}</li>
+		<li><strong>Budget:</strong> ${customerData.budget}</li>
+		<li><strong>Alternate Destinations:</strong> ${customerData.alternateDestinations}</li>
+		<li><strong>Interest Level:</strong> ${customerData.interestLevel}</li>
+		<li><strong>Notes:</strong> ${customerData.notes}</li>
+	  </ul>
+	`;    // Send email
+	const info = await transporter.sendMail({
+	  from: `"House of Royals Wellness Temple" <${process.env.SMTP_EMAIL}>`,
+	  to: process.env.TOURDL_EMAIL, // Use environment variable only
+	  cc: customerData.email !== "unknown" ? customerData.email : undefined, // Only CC if we have a valid email
+	  subject: `New Wellness Retreat Inquiry - ${customerData.customerName} on - ${customerData.travelDate}`,
+	  html: emailBody,
+	});
 
-    console.log(`Email sent: ${info.messageId}`);
-    return true;
+	console.log(`Email sent: ${info.messageId}`);
+	return true;
   } catch (error) {
-    console.error("Error sending email:", error);
-    return false;
+	console.error("Error sending email:", error);
+	return false;
   }
 }
 
 // Send email when technical difficulties occur
 async function sendTechnicalDifficultyEmail(): Promise<boolean> {
   try {
-    // Create email transporter
-    const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_SERVER,
-      port: parseInt(process.env.SMTP_PORT || '587'),
-      secure: false, // true for 465, false for other ports
-      auth: {
-        user: process.env.SMTP_EMAIL,
-        pass: process.env.SMTP_PASSWORD,
-      },
-    });
+	// Create email transporter
+	const transporter = nodemailer.createTransport({
+	  host: process.env.SMTP_SERVER,
+	  port: parseInt(process.env.SMTP_PORT || '587'),
+	  secure: false, // true for 465, false for other ports
+	  auth: {
+		user: process.env.SMTP_EMAIL,
+		pass: process.env.SMTP_PASSWORD,
+	  },
+	});
 
-    // Format customer data for email body
-    const emailBody = `
-      <h2>Technical Difficulty Notification</h2>
-      <p><strong>Date:</strong> ${new Date().toLocaleString()}</p>
-      <p>A technical difficulty occurred during a call. Below is the information collected so far:</p>
-      <h3>Customer Information:</h3>
-      <ul>
-        <li><strong>Called From Number:</strong> ${customerData.calledFromNumber}</li>
-        <li><strong>Name:</strong> ${customerData.customerName}</li>
-        <li><strong>Email:</strong> ${customerData.email}</li>
-        <li><strong>Preferred Phone:</strong> ${customerData.phoneNumber}</li>
-        <li><strong>Preferred Travel Date:</strong> ${customerData.travelDate}</li>
-        <li><strong>Stay Duration:</strong> ${customerData.stayDuration}</li>
-        <li><strong>Interested Activities:</strong> ${customerData.activities}</li>
-        <li><strong>Budget:</strong> ${customerData.budget}</li>
-        <li><strong>Alternate Destinations:</strong> ${customerData.alternateDestinations}</li>
-        <li><strong>Interest Level:</strong> ${customerData.interestLevel}</li>
-        <li><strong>Notes:</strong> ${customerData.notes}</li>
-      </ul>
-    `;
+	// Format customer data for email body
+	const emailBody = `
+	  <h2>Technical Difficulty Notification</h2>
+	  <p><strong>Date:</strong> ${new Date().toLocaleString()}</p>
+	  <p>A technical difficulty occurred during a call. Below is the information collected so far:</p>
+	  <h3>Customer Information:</h3>
+	  <ul>
+		<li><strong>Called From Number:</strong> ${customerData.calledFromNumber}</li>
+		<li><strong>Name:</strong> ${customerData.customerName}</li>
+		<li><strong>Email:</strong> ${customerData.email}</li>
+		<li><strong>Preferred Phone:</strong> ${customerData.phoneNumber}</li>
+		<li><strong>Preferred Travel Date:</strong> ${customerData.travelDate}</li>
+		<li><strong>Stay Duration:</strong> ${customerData.stayDuration}</li>
+		<li><strong>Interested Activities:</strong> ${customerData.activities}</li>
+		<li><strong>Budget:</strong> ${customerData.budget}</li>
+		<li><strong>Alternate Destinations:</strong> ${customerData.alternateDestinations}</li>
+		<li><strong>Interest Level:</strong> ${customerData.interestLevel}</li>
+		<li><strong>Notes:</strong> ${customerData.notes}</li>
+	  </ul>
+	`;
 
-    // Send email to tour registration email only (no CC to customer)
-    const info = await transporter.sendMail({
-      from: `"House of Royals Wellness Temple" <${process.env.SMTP_EMAIL}>`,
-      to: process.env.TOURDL_EMAIL, // Only send to tour registration, not to the customer
-      subject: `Technical Difficulty - Call from ${customerData.calledFromNumber}`,
-      html: emailBody,
-    });
+	// Send email to tour registration email only (no CC to customer)
+	const info = await transporter.sendMail({
+	  from: `"House of Royals Wellness Temple" <${process.env.SMTP_EMAIL}>`,
+	  to: process.env.TOURDL_EMAIL, // Only send to tour registration, not to the customer
+	  subject: `Technical Difficulty - Call from ${customerData.calledFromNumber}`,
+	  html: emailBody,
+	});
 
-    console.log(`Technical difficulty email sent: ${info.messageId}`);
-    return true;
+	console.log(`Technical difficulty email sent: ${info.messageId}`);
+	return true;
   } catch (error) {
-    console.error("Error sending technical difficulty email:", error);
-    return false;
+	console.error("Error sending technical difficulty email:", error);
+	return false;
   }
 }
 
@@ -266,18 +266,29 @@ async function hangUpCall() {
 async function startRecognizing(callMedia: CallMedia, callerId: string, message: string, context: string){
 	try {
 		const play : TextSource = { text: message, voiceName: currentCallVoice, kind: "textSource"}
-		const recognizeOptions: CallMediaRecognizeSpeechOptions = { 
-			endSilenceTimeoutInSeconds: 2, 
-			playPrompt: play, 
-			initialSilenceTimeoutInSeconds: 15, 
-			interruptPrompt: true, 
-			operationContext: context, 
+		const recognizeOptions: CallMediaRecognizeSpeechOptions = {
+			endSilenceTimeoutInSeconds: 2,
+			playPrompt: play,
+			initialSilenceTimeoutInSeconds: 15,
+			interruptPrompt: true,
+			operationContext: context,
 			kind: "callMediaRecognizeSpeechOptions",
-		}; 
+		};
+		const dtmfOptions: CallMediaRecognizeDtmfOptions = {
+			maxTonesToCollect: 20,
+			interToneTimeoutInSeconds: 5000,
+			stopDtmfTones: [DtmfTone.Pound],
+			operationContext: context,
+			kind: "callMediaRecognizeDtmfOptions",
+		};
 
 		const targetParticipant = createIdentifierFromRawId(callerId);
-		await callMedia.startRecognizing(targetParticipant, recognizeOptions);
-		console.log(`Started recognizing with context: ${context}`);
+		// Start both speech and DTMF recognition
+		await Promise.all([
+			callMedia.startRecognizing(targetParticipant, recognizeOptions),
+			callMedia.startRecognizing(targetParticipant, dtmfOptions)
+		]);
+		console.log(`Started speech and DTMF recognizing with context: ${context}`);
 	} catch (error) {		
 		console.error(`Error in startRecognizing: ${error}`);
 		technicalDifficultiesCount++; // Increment the technical difficulties counter
@@ -635,9 +646,9 @@ function generateContinuationPrompt(customerData: any): string {
   
   // Start with a personalized greeting if we have their name
   if (customerData.customerName !== "unknown") {
-    prompt = `Thank you for your patience, ${customerData.customerName}. `;
+	prompt = `Thank you for your patience, ${customerData.customerName}. `;
   } else {
-    prompt = "Thank you for your patience. ";
+	prompt = "Thank you for your patience. ";
   }
   
   // Add context based on what we already know
@@ -649,16 +660,16 @@ function generateContinuationPrompt(customerData: any): string {
   if (customerData.phoneNumber === "unknown") missingFields.push("your preferred contact number");
   
   if (missingFields.length > 0) {
-    // Format the list of missing information
-    if (missingFields.length === 1) {
-      prompt += `Let's continue our conversation about your Wellness retreat to Luxor, Egypt. I'd still like to know ${missingFields[0]}.`;
-    } else {
-      const lastItem = missingFields.pop();
-      prompt += `Let's continue our conversation about your Wellness retreat to Luxor, Egypt. I'd still like to know ${missingFields.join(", ")} and ${lastItem}.`;
-    }
+	// Format the list of missing information
+	if (missingFields.length === 1) {
+	  prompt += `Let's continue our conversation about your Wellness retreat to Luxor, Egypt. I'd still like to know ${missingFields[0]}.`;
+	} else {
+	  const lastItem = missingFields.pop();
+	  prompt += `Let's continue our conversation about your Wellness retreat to Luxor, Egypt. I'd still like to know ${missingFields.join(", ")} and ${lastItem}.`;
+	}
   } else {
-    // If we have all the key information
-    prompt += "Let's continue our conversation about your Wellness retreat to Luxor, Egypt. Is there anything else you'd like to know or share about your trip?";
+	// If we have all the key information
+	prompt += "Let's continue our conversation about your Wellness retreat to Luxor, Egypt. Is there anything else you'd like to know or share about your trip?";
   }
   
   return prompt;
@@ -670,7 +681,7 @@ function splitLongMessage(message: string): string[] {
   const maxChunkLength = 1000;
   
   if (message.length <= maxChunkLength) {
-    return [message];
+	return [message];
   }
   
   const chunks: string[] = [];
@@ -680,40 +691,40 @@ function splitLongMessage(message: string): string[] {
   
   let currentChunk = "";
   for (const sentence of sentences) {
-    // If adding this sentence would exceed the limit, start a new chunk
-    if (currentChunk.length + sentence.length > maxChunkLength) {
-      if (currentChunk.length > 0) {
-        chunks.push(currentChunk.trim());
-        currentChunk = "";
-      }
-      
-      // If a single sentence is longer than maxChunkLength, split it by words
-      if (sentence.length > maxChunkLength) {
-        const words = sentence.split(' ');
-        let wordChunk = "";
-        
-        for (const word of words) {
-          if (wordChunk.length + word.length + 1 > maxChunkLength) {
-            chunks.push(wordChunk.trim());
-            wordChunk = word;
-          } else {
-            wordChunk += ' ' + word;
-          }
-        }
-        
-        if (wordChunk.length > 0) {
-          currentChunk = wordChunk;
-        }
-      } else {
-        currentChunk = sentence;
-      }
-    } else {
-      currentChunk += sentence;
-    }
+	// If adding this sentence would exceed the limit, start a new chunk
+	if (currentChunk.length + sentence.length > maxChunkLength) {
+	  if (currentChunk.length > 0) {
+		chunks.push(currentChunk.trim());
+		currentChunk = "";
+	  }
+	  
+	  // If a single sentence is longer than maxChunkLength, split it by words
+	  if (sentence.length > maxChunkLength) {
+		const words = sentence.split(' ');
+		let wordChunk = "";
+		
+		for (const word of words) {
+		  if (wordChunk.length + word.length + 1 > maxChunkLength) {
+			chunks.push(wordChunk.trim());
+			wordChunk = word;
+		  } else {
+			wordChunk += ' ' + word;
+		  }
+		}
+		
+		if (wordChunk.length > 0) {
+		  currentChunk = wordChunk;
+		}
+	  } else {
+		currentChunk = sentence;
+	  }
+	} else {
+	  currentChunk += sentence;
+	}
   }
   
   if (currentChunk.length > 0) {
-    chunks.push(currentChunk.trim());
+	chunks.push(currentChunk.trim());
   }
   
   return chunks;
@@ -722,25 +733,25 @@ function splitLongMessage(message: string): string[] {
 // Helper function to safely handle call operations
 async function safeCallOperation(operation: () => Promise<any>, errorMessage: string): Promise<any> {
   try {
-    return await operation();
+	return await operation();
   } catch (error) {
-    console.error(`${errorMessage}: ${error}`);
-    
-    // Check specifically for "Call not found" errors
-    if (error.toString().includes("Call not found") || error.toString().includes("not found")) {
-      console.log("Call appears to have been disconnected or no longer exists.");
-      
-      // Send email if we have any meaningful data and haven't already sent one
-      if (!emailSent && Object.values(customerData).some(val => val !== 'unknown' && val !== '')) {
-        console.log("Call was lost but some data was collected. Sending technical difficulty email...");
-        await sendTechnicalDifficultyEmail().catch(err => 
-          console.error("Failed to send technical difficulty email:", err)
-        );
-      }
-    }
-    
-    // Rethrow the error so caller can handle it if needed
-    throw error;
+	console.error(`${errorMessage}: ${error}`);
+	
+	// Check specifically for "Call not found" errors
+	if (error.toString().includes("Call not found") || error.toString().includes("not found")) {
+	  console.log("Call appears to have been disconnected or no longer exists.");
+	  
+	  // Send email if we have any meaningful data and haven't already sent one
+	  if (!emailSent && Object.values(customerData).some(val => val !== 'unknown' && val !== '')) {
+		console.log("Call was lost but some data was collected. Sending technical difficulty email...");
+		await sendTechnicalDifficultyEmail().catch(err => 
+		  console.error("Failed to send technical difficulty email:", err)
+		);
+	  }
+	}
+	
+	// Rethrow the error so caller can handle it if needed
+	throw error;
   }
 }
 
@@ -751,17 +762,17 @@ function resetCustomerData(): void {
   
   // Reset all customer data
   customerData = {
-    customerName: "unknown",
-    email: "unknown",
-    phoneNumber: "unknown",
-    calledFromNumber: calledFromNumber, // Preserve the called-from number
-    travelDate: "unknown",
-    stayDuration: "unknown",
-    activities: "unknown",
-    budget: "unknown",
-    alternateDestinations: "unknown",
-    notes: "unknown",
-    interestLevel: "unknown"
+	customerName: "unknown",
+	email: "unknown",
+	phoneNumber: "unknown",
+	calledFromNumber: calledFromNumber, // Preserve the called-from number
+	travelDate: "unknown",
+	stayDuration: "unknown",
+	activities: "unknown",
+	budget: "unknown",
+	alternateDestinations: "unknown",
+	notes: "unknown",
+	interestLevel: "unknown"
   };
   
   // Reset other global state
@@ -779,19 +790,19 @@ function createPersonalizedGoodbyeMessage(): string {
   
   // Add personalization if we have their name
   if (customerData.customerName !== "unknown") {
-    message = `Thank you ${customerData.customerName} for your interest in our Wellness Retreat to Luxor, Egypt. `;
+	message = `Thank you ${customerData.customerName} for your interest in our Wellness Retreat to Luxor, Egypt. `;
   }
   
   // Add contact method-specific message
   let contactMethod = "";
   if (customerData.phoneNumber !== "unknown") {
-    contactMethod = `call you back at ${customerData.phoneNumber}`;
+	contactMethod = `call you back at ${customerData.phoneNumber}`;
   } else if (customerData.email !== "unknown") {
-    contactMethod = `reach out to you at ${customerData.email}`;
+	contactMethod = `reach out to you at ${customerData.email}`;
   } else if (customerData.calledFromNumber !== "unknown") {
-    contactMethod = `call you back at ${customerData.calledFromNumber}`;
+	contactMethod = `call you back at ${customerData.calledFromNumber}`;
   } else {
-    contactMethod = "contact you using the information you've provided";
+	contactMethod = "contact you using the information you've provided";
   }
   
   // Complete the message
