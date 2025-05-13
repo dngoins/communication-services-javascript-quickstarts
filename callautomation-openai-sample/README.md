@@ -48,6 +48,77 @@ Open the `.env` file to configure the following settings
 6. `AZURE_OPENAI_DEPLOYMENT_MODEL_NAME`: Azure Open AI deployment name
 6. `AGENT_PHONE_NUMBER`: Agent phone number to transfer the call to resolve queries
 
+## Features
+
+- Call Automation to answer and handle inbound calls
+- Speech recognition to understand caller input
+- Azure OpenAI integration for natural language processing
+- Text to Speech for responding to callers
+- Azure Communication Services Email for sending confirmation emails
+- DTMF (Dual-Tone Multi-Frequency) handling for keypad inputs
+- Error handling and reporting
+- Technical difficulty tracking
+
+## DTMF Functionality
+
+This sample includes comprehensive DTMF (touchtone keypad) support for callers:
+
+- Press `0` at any time to be transferred to a live agent
+- Press `1` for "yes" responses
+- Press `2` for "no" responses
+- Enter a phone number directly using the keypad followed by `#`
+- Enter dates in MMDD or MMDDYYYY format
+- Enter numeric information such as duration of stay
+
+The application will detect these inputs and respond appropriately, making it easier for callers to interact with the system without needing to speak.
+
+## Configuration
+
+This sample requires the following environment variables to be set in a `.env` file:
+
+### Azure Communication Services
+
+- CONNECTION_STRING: Your Azure Communication Services resource connection string
+- CALLBACK_URI: The URI for callbacks from the service
+- AGENT_PHONE_NUMBER: Phone number for agent transfers
+
+### Azure OpenAI
+
+- AZURE_OPENAI_SERVICE_ENDPOINT: Your Azure OpenAI service endpoint
+- AZURE_OPENAI_SERVICE_KEY: Your Azure OpenAI service key
+- AZURE_OPENAI_DEPLOYMENT_MODEL_NAME: Your Azure OpenAI deployed model name
+
+### Cognitive Services
+
+- COGNITIVE_SERVICE_ENDPOINT: Your Azure Cognitive Services endpoint
+
+### Email Configuration
+
+- ACS_SENDER_EMAIL: Your verified sender email address from Azure Communication Services
+- TOURDL_EMAIL: The recipient email address
+
+### Audio Configuration
+
+- TYPING_INDICATOR_AUDIO_URL: URL to the MP3 file for typing indicator sound (optional)
+
+## Audio Typing Indicators
+
+This sample supports playing MP3 files as typing indicators while the AI is processing a response. This provides a better user experience than silence or SSML-based sounds.
+
+To use this feature:
+1. Place an MP3 file named `typing-indicator.mp3` in the `public/audio/` directory
+2. Configure the `TYPING_INDICATOR_AUDIO_URL` environment variable (defaults to `{CALLBACK_URI}/audio/typing-indicator.mp3`)
+3. The system will automatically use this MP3 file when indicating that the AI is processing
+
+If the MP3 file cannot be accessed or played, the system will automatically fall back to the SSML-based typing indicator.
+
+## Email Functionality
+
+This sample uses Azure Communication Services Email to send confirmations and technical difficulty notifications. The email functionality is implemented in two functions:
+
+1. `sendCustomerDataEmail`: Sends a formatted email to both admin and customer with booking details
+2. `sendTechnicalDifficultyEmail`: Sends a notification to admin when technical difficulties occur
+
 ### Run app locally
 
 1. Open a new Powershell window, cd into the `callautomation-openai-sample` folder and run `npm run dev`
